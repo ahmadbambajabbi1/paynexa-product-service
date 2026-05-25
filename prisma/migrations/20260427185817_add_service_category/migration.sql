@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "ServiceAvailability_listing_id_day_of_week_start_minute_end_min" RENAME TO "ServiceAvailability_listing_id_day_of_week_start_minute_end_key";

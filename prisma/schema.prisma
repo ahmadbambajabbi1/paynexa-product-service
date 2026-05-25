@@ -1,0 +1,279 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProfessionalFeeRole {
+  LAWYER
+  AGENT
+}
+
+enum ServiceProviderStatus {
+  ONLINE
+  OFFLINE
+  AWAY
+}
+
+enum ServiceListingPriceType {
+  FIXED
+  RANGE
+}
+
+enum ServiceBookingStatus {
+  PENDING_PAYMENT
+  FUNDED
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+  CANCELLED
+  REFUNDED
+}
+
+/// Product rows and service listings share the same draft/publish lifecycle.
+enum CatalogListingVisibility {
+  DRAFT
+  PUBLISHED
+}
+
+/// Singleton-style platform fee rules for the service marketplace (admin-maintained).
+model ServiceMarketplaceFeePolicy {
+  id String @id @default("default")
+
+  /// When true, provider pays a percent of the agreed service amount to the platform (deducted at payout).
+  providerFeeEnabled Boolean @default(false) @map("provider_fee_enabled")
+  providerFeePercent  Decimal @default(0) @map("provider_fee_percent") @db.Decimal(5, 2)
+
+  /// When true, the customer pays an extra percent on top of the agreed service amount at funding time.
+  customerFeeEnabled Boolean @default(false) @map("customer_fee_enabled")
+  customerFeePercent  Decimal @default(0) @map("customer_fee_percent") @db.Decimal(5, 2)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+}
+
+/// Canonical product taxonomy; writes originate from admin via `productType.create` events.
+model ProductType {
+  id                 String   @id @default(cuid())
+  /// Stable machine key (e.g. land_sale). Immutable after creation.
+  code               String   @unique
+  name               String
+  description        String?
+  active             Boolean  @default(true)
+  sortOrder          Int      @default(0)
+  lawyerPricingEnabled Boolean @default(false) @map("lawyer_pricing_enabled")
+  agentPricingEnabled Boolean @default(false) @map("agent_pricing_enabled")
+  /// Dynamic attribute definitions for product instances (name, valueType, required, optional label).
+  fieldDefinitions Json @map("field_definitions")
+  /// Idempotency key from admin-service (one per create request).
+  clientRequestId    String?  @unique
+  /// Admin user id from JWT at publish time (audit).
+  createdByAdminId   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([active, sortOrder])
+
+  products Product[]
+  professionalFees ProfessionalProductTypeFee[]
+}
+
+/// Per-user fee for a product type (lawyer or agent), when the type allows that role to set pricing.
+model ProfessionalProductTypeFee {
+  id            String              @id @default(cuid())
+  userId        String              @map("user_id")
+  productTypeId String              @map("product_type_id")
+  productType   ProductType         @relation(fields: [productTypeId], references: [id], onDelete: Cascade)
+  role          ProfessionalFeeRole @map("role")
+  feeAmount     Decimal             @map("fee_amount") @db.Decimal(18, 2)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@unique([userId, productTypeId])
+  @@index([userId])
+}
+
+/// Seller listing; images are public URLs (e.g. R2); attributes match ProductType.fieldDefinitions.
+model Product {
+  id              String      @id @default(cuid())
+  sellerUserId    String      @map("seller_user_id")
+  productTypeId   String      @map("product_type_id")
+  productType     ProductType @relation(fields: [productTypeId], references: [id])
+  /// Draft listings are visible only to the seller; published appear in buyer pickers.
+  visibility      CatalogListingVisibility @default(PUBLISHED) @map("visibility")
+  price           Decimal     @default(0) @db.Decimal(18, 2)
+  /// Short label for lists, dropdowns, and transaction titles (not the long description).
+  name            String      @default("") @db.VarChar(200)
+  description     String      @db.Text
+  /// Gallery URLs (required visuals for every product).
+  productImages   Json        @map("product_images")
+  /// Additional images (docs, extra angles, etc.).
+  otherImages     Json        @map("other_images")
+  /// Keyed by field definition `name`; values follow valueType semantics.
+  attributes      Json
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([sellerUserId, visibility, createdAt(sort: Desc)])
+  @@index([productTypeId])
+}
+
+model ServiceCategory {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  listings ServiceListing[]
+
+  @@index([active, sortOrder])
+}
+
+/// Provider profile extension stored locally (user-service remains source of truth for identity).
+model ServiceProvider {
+  id                   String                @id @default(cuid())
+  userId               String                @unique @map("user_id")
+  displayName          String?               @map("display_name")
+  bio                  String?               @db.Text
+  verificationStatus   String                @default("unverified") @map("verification_status")
+  status               ServiceProviderStatus @default(OFFLINE)
+  lastSeenAt           DateTime?             @map("last_seen_at")
+  /// Rolling average from bookings/messages (seconds).
+  avgResponseTimeSec   Int                   @default(0) @map("avg_response_time_sec")
+  /// Cached aggregate rating (0..5). Recomputed async; treated as hint.
+  ratingAvg            Float                 @default(0) @map("rating_avg")
+  ratingCount          Int                   @default(0) @map("rating_count")
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  location ServiceLocation?
+  listings ServiceListing[]
+  bookings ServiceBooking[] @relation("booking_provider")
+  reviews  ServiceReview[]
+
+  @@index([status, ratingAvg])
+}
+
+model ServiceLocation {
+  id          String   @id @default(cuid())
+  providerId  String   @unique @map("provider_id")
+  provider    ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  latitude    Float    @map("latitude")
+  longitude   Float    @map("longitude")
+  addressText String?  @map("address_text")
+  region      String?  @map("region")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([latitude, longitude])
+}
+
+model ServiceListing {
+  id                     String                  @id @default(cuid())
+  providerId             String                  @map("provider_id")
+  provider               ServiceProvider         @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  categoryId             String                  @map("category_id")
+  category               ServiceCategory         @relation(fields: [categoryId], references: [id])
+  title                  String                  @db.VarChar(200)
+  description            String                  @db.Text
+  /// R2 key under `service_cover/{userId}/...` (or a public https URL).
+  coverImage             String                  @default("") @map("cover_image")
+  /// R2 keys under `service_images/{userId}/...` (or public https URLs).
+  serviceImages          Json                    @default("[]") @map("service_images")
+  tags                   Json                    @default("[]")
+  media                  Json                    @default("[]")
+  priceType              ServiceListingPriceType @default(FIXED) @map("price_type")
+  priceAmount            Decimal?                @map("price_amount") @db.Decimal(18, 2)
+  priceMin               Decimal?                @map("price_min") @db.Decimal(18, 2)
+  priceMax               Decimal?                @map("price_max") @db.Decimal(18, 2)
+  estimatedDeliveryMins  Int?                    @map("estimated_delivery_mins")
+  active                 Boolean                 @default(true)
+  /// Draft services stay off the public marketplace until published.
+  visibility             CatalogListingVisibility @default(PUBLISHED) @map("visibility")
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  availability ServiceAvailability[]
+  bookings     ServiceBooking[]
+  reviews      ServiceReview[]
+
+  @@index([providerId, active, visibility, createdAt(sort: Desc)])
+  @@index([categoryId, active, visibility])
+}
+
+/// Weekly schedule (provider-level per listing). Minutes-from-midnight in provider local time.
+model ServiceAvailability {
+  id          String   @id @default(cuid())
+  listingId   String   @map("listing_id")
+  listing     ServiceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int      @map("day_of_week") // 0=Sun..6=Sat
+  startMinute Int      @map("start_minute") // inclusive
+  endMinute   Int      @map("end_minute") // exclusive
+  timezone    String   @default("Africa/Banjul")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([listingId, dayOfWeek])
+  @@unique([listingId, dayOfWeek, startMinute, endMinute])
+}
+
+model ServiceBooking {
+  id               String              @id @default(cuid())
+  listingId        String              @map("listing_id")
+  listing          ServiceListing      @relation(fields: [listingId], references: [id])
+  clientUserId     String              @map("client_user_id")
+  providerId       String              @map("provider_id")
+  provider         ServiceProvider     @relation("booking_provider", fields: [providerId], references: [id])
+  scheduledAt      DateTime            @map("scheduled_at")
+  /// Service rendezvous coordinates / address supplied by client at booking time.
+  serviceLatitude   Float?             @map("service_latitude")
+  serviceLongitude  Float?             @map("service_longitude")
+  /// Landmark / directions (optional supplement to the pinned place label).
+  serviceAddressText String?           @map("service_address_text")
+  /// User-facing location line (e.g. Google Places formatted address).
+  serviceLocationLabel String?        @map("service_location_label")
+  serviceGooglePlaceId String?        @map("service_google_place_id")
+  status           ServiceBookingStatus @default(PENDING_PAYMENT)
+  /// External references for escrow/transaction services.
+  transactionId    String?             @map("transaction_id")
+  escrowWalletHoldId String?           @map("escrow_wallet_hold_id")
+  /// Agreed service price (before platform fees).
+  amount           Decimal             @db.Decimal(18, 2)
+  customerPlatformFeeAmount Decimal @default(0) @map("customer_platform_fee_amount") @db.Decimal(18, 2)
+  providerPlatformFeeAmount Decimal @default(0) @map("provider_platform_fee_amount") @db.Decimal(18, 2)
+  currency         String              @default("GMD")
+  notes            String?             @db.Text
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  review ServiceReview?
+
+  @@index([clientUserId, createdAt(sort: Desc)])
+  @@index([providerId, createdAt(sort: Desc)])
+  @@index([listingId, scheduledAt])
+}
+
+model ServiceReview {
+  id         String          @id @default(cuid())
+  bookingId  String          @unique @map("booking_id")
+  booking    ServiceBooking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  listingId  String          @map("listing_id")
+  listing    ServiceListing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  providerId String          @map("provider_id")
+  provider   ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  clientUserId String        @map("client_user_id")
+  rating     Int
+  comment    String?         @db.Text
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([providerId, createdAt(sort: Desc)])
+  @@index([listingId, createdAt(sort: Desc)])
+  @@index([rating])
+}
