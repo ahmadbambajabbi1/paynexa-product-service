@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { RabbitmqService } from '../infrastructure/rabbitmq/rabbitmq.service';
 
 export type SessionUser = {
   id: string;
@@ -47,6 +48,8 @@ function parseApprovedProfessionalRole(
 export class UserSessionService {
   private readonly logger = new Logger(UserSessionService.name);
 
+  constructor(private readonly rabbit: RabbitmqService) {}
+
   async resolveUser(
     authorization: string | undefined,
     deviceId: string | undefined,
@@ -54,22 +57,14 @@ export class UserSessionService {
     if (!authorization?.startsWith('Bearer ') || !deviceId) {
       return null;
     }
-    const base = process.env.USER_SERVICE_URL ?? 'http://127.0.0.1:5001';
-    const url = new URL('/users/me', base.endsWith('/') ? base : `${base}/`);
     try {
-      const r = await fetch(url, {
-        headers: {
-          authorization,
-          'x-device-id': deviceId,
-        },
-      });
-      if (!r.ok) {
-        return null;
-      }
-      const data = (await r.json()) as {
+      const data = await this.rabbit.rpc<{
         user?: { id: string; professionalApps?: unknown };
-      };
-      const id = data.user?.id;
+      }>('user.rpc.session.resolve', {
+        authorization,
+        deviceId,
+      });
+      const id = data?.user?.id;
       if (typeof id !== 'string' || !id.length) {
         return null;
       }
@@ -78,7 +73,7 @@ export class UserSessionService {
       );
       return { id, professionalRole };
     } catch (e) {
-      this.logger.warn(`User service unreachable: ${String(e)}`);
+      this.logger.warn(`User service RPC error: ${String(e)}`);
       return null;
     }
   }

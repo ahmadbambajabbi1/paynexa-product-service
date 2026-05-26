@@ -16,5 +16,6 @@ import { R2UploadService } from './r2-upload.service';
     R2UploadService,
     InternalSecretGuard,
   ],
+  exports: [ProductsService],
 })
 export class ProductsModule {}

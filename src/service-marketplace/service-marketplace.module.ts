@@ -19,5 +19,6 @@ import { BookingRealtimeGateway } from './booking-realtime.gateway';
     R2UploadService,
     BookingRealtimeGateway,
   ],
+  exports: [ServiceMarketplaceService],
 })
 export class ServiceMarketplaceModule {}
