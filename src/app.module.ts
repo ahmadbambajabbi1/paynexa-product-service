@@ -9,6 +9,8 @@ import { ProductTypesModule } from './product-types/product-types.module';
 import { ProductsModule } from './products/products.module';
 import { ServiceMarketplaceModule } from './service-marketplace/service-marketplace.module';
 
+import { RabbitmqRpcConsumer } from './infrastructure/rabbitmq/rabbitmq-rpc.consumer';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -23,6 +25,6 @@ import { ServiceMarketplaceModule } from './service-marketplace/service-marketpl
     ServiceMarketplaceModule,
   ],
   controllers: [AppController],
-  providers: [],
+  providers: [RabbitmqRpcConsumer],
 })
 export class AppModule {}
