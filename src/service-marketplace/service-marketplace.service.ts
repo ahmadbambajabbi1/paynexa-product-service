@@ -1725,6 +1725,19 @@ export class ServiceMarketplaceService {
           []) as BookingCommentSocketPayload[],
       );
     }
+
+    // Marketplace push notifications (PayNexa) — enable when booking FCM routing is live.
+    // const notifyRecipientId = isProvider ? updated.clientUserId : updated.provider.userId;
+    // await this.rabbit.publish('marketplace.notification.push', {
+    //   bookingId,
+    //   transactionId: updated.transactionId ?? undefined,
+    //   recipientId: notifyRecipientId,
+    //   title: 'PayNexa',
+    //   body: `Service booking updated (${dto.action}) for "${updated.listing.title}".`,
+    //   eventType: `marketplace.booking.${String(dto.action).toLowerCase()}`,
+    //   occurredAt: new Date().toISOString(),
+    // });
+
     return {
       booking: expandedBooking,
       action: dto.action,
